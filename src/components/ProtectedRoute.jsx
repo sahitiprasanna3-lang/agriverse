@@ -1,0 +1,116 @@
+import React from 'react';
+import { Navigate, Outlet } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext.jsx';
+import { useLanguage } from '../context/LanguageContext.jsx';
+import { Loader2, ShieldAlert } from 'lucide-react';
+
+export function ProtectedRoute({ children }) {
+  const { currentUser, loading } = useAuth();
+  const { t } = useLanguage();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-700">
+        <div className="flex flex-col items-center gap-3 p-8 bg-white rounded-2xl shadow-sm border border-slate-200">
+          <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
+          <p className="text-sm font-medium text-slate-600">{t?.('processing') || 'Loading...'}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return children ? <>{children}</> : <Outlet />;
+}
+
+export function AdminRoute({ children }) {
+  const { currentUser, userProfile, isAdminUser, loading } = useAuth();
+  const { t } = useLanguage();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-700">
+        <div className="flex flex-col items-center gap-3 p-8 bg-white rounded-2xl shadow-sm border border-slate-200">
+          <Loader2 className="w-8 h-8 text-purple-600 animate-spin" />
+          <p className="text-sm font-medium text-slate-600">{t?.('processing') || 'Loading...'}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return <Navigate to="/login" replace />;
+  }
+
+  const isAuthorizedAdmin =
+    isAdminUser &&
+    (currentUser.email === 'chinnagoudmallepula@gmail.com' ||
+      currentUser.email === 'kisanadmin@gmail.com' ||
+      currentUser.email === 'iamajaz8055@gmail.com' ||
+      currentUser.email === 'ajazahmedmd7@gmail.com') &&
+    userProfile?.role === 'admin';
+
+  if (!isAuthorizedAdmin) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-3xl border border-rose-200 shadow-xl p-6 sm:p-8 text-center space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto border border-rose-100">
+            <ShieldAlert className="w-8 h-8 text-rose-600" />
+          </div>
+          <div>
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-800 uppercase tracking-wider">
+              403 Access Denied
+            </span>
+            <h2 className="text-xl font-bold text-slate-900 mt-2">
+              Admin Portal Restricted
+            </h2>
+            <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+              Admin Portal access is strictly restricted to the authenticated platform administrator (<strong>chinnagoudmallepula@gmail.com</strong>) with role <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">admin</code>. All other accounts are blocked.
+            </p>
+          </div>
+          <div className="p-3 bg-slate-50 rounded-xl text-left text-xs space-y-1 font-mono text-slate-600 border border-slate-200">
+            <div>Current Auth: <span className="text-slate-900 font-semibold">{currentUser.email || 'Phone/Anonymous'}</span></div>
+            <div>Assigned Role: <span className="text-slate-900 font-semibold">{userProfile?.role || 'Unassigned'}</span></div>
+            <div>Admin Status: <span className="text-rose-600 font-bold">Unauthorized & Blocked</span></div>
+          </div>
+          <button
+            type="button"
+            onClick={() => (window.location.href = '/dashboard')}
+            className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer shadow-xs"
+          >
+            Return to Ecosystem Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return children ? <>{children}</> : <Outlet />;
+}
+
+export function PublicRoute({ children }) {
+  const { currentUser, loading } = useAuth();
+  const { t } = useLanguage();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-700">
+        <div className="flex flex-col items-center gap-3 p-8 bg-white rounded-2xl shadow-sm border border-slate-200">
+          <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
+          <p className="text-sm font-medium text-slate-600">{t?.('processing') || 'Loading...'}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (currentUser) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return children ? <>{children}</> : <Outlet />;
+}
+
+export default ProtectedRoute;

@@ -1,0 +1,306 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Verified Admin Gate: requires email_verified == true when matching designated admin emails
+    // or an existing trusted record in /admins/{uid}
+    function isAdmin() {
+      return isSignedIn() && (
+        (
+          request.auth.token.email_verified == true &&
+          request.auth.token.email in [
+            'ajazmd8055@gmail.com',
+            'iamajaz8055@gmail.com',
+            'chinnagoudmallepula@gmail.com',
+            'kisanadmin@gmail.com',
+            'ajazahmedmd7@gmail.com'
+          ]
+        ) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isOptionalNullableString(data, field, maxLen) {
+      return !(field in data) || data[field] == null || (data[field] is string && data[field].size() <= maxLen);
+    }
+
+    function isValidEcosystemRole(role) {
+      return role is string && role in ['farmer', 'fpo', 'market', 'market_admin', 'transporter', 'admin'];
+    }
+
+    // UserProfile Validation Blueprint (PII-isolated & anti-privilege-escalation)
+    function isValidUserProfile(data, userId) {
+      return data.size() <= 55 &&
+        (!('uid' in data) || (data.uid is string && data.uid == userId && data.uid.size() <= 128)) &&
+        (!('role' in data) || (
+          isValidEcosystemRole(data.role) &&
+          (data.role != 'admin' || isAdmin())
+        )) &&
+        isOptionalNullableString(data, 'displayName', 200) &&
+        isOptionalNullableString(data, 'email', 200) &&
+        isOptionalNullableString(data, 'phoneNumber', 64) &&
+        isOptionalNullableString(data, 'photoURL', 500000) &&
+        isOptionalNullableString(data, 'provider', 64) &&
+        isOptionalNullableString(data, 'status', 32) &&
+        isOptionalNullableString(data, 'lastActive', 64) &&
+        isOptionalNullableString(data, 'createdAt', 64) &&
+        isOptionalNullableString(data, 'lastLoginAt', 64) &&
+        isOptionalNullableString(data, 'location', 300) &&
+        isOptionalNullableString(data, 'address', 500) &&
+        isOptionalNullableString(data, 'dateOfBirth', 64) &&
+        (!('isOnline' in data) || data.isOnline is bool) &&
+        (!('emailVerified' in data) || data.emailVerified is bool) &&
+        (!('phoneVerified' in data) || data.phoneVerified is bool);
+    }
+
+    // Users Collection (PII Isolated: only owner or verified admin can read)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+
+      allow create: if isSignedIn() &&
+        isValidId(userId) &&
+        isOwner(userId) &&
+        'uid' in incoming() &&
+        incoming().uid == request.auth.uid &&
+        isValidUserProfile(incoming(), userId);
+
+      allow update: if isSignedIn() &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming(), userId) && (
+          (
+            isOwner(userId) &&
+            (!('uid' in existing()) || !('uid' in incoming()) || incoming().uid == existing().uid)
+          ) ||
+          isAdmin()
+        );
+
+      allow delete: if isAdmin() &&
+        isValidId(userId) &&
+        !(existing().email in [
+          'chinnagoudmallepula@gmail.com',
+          'kisanadmin@gmail.com',
+          'iamajaz8055@gmail.com',
+          'ajazmd8055@gmail.com',
+          'ajazahmedmd7@gmail.com'
+        ]);
+    }
+
+    // Admin-Only Collections
+    match /admins/{adminId} {
+      allow get, list: if isAdmin();
+      allow create, update: if isAdmin() &&
+        isValidId(adminId) &&
+        incoming().size() <= 15 &&
+        isOptionalNullableString(incoming(), 'uid', 128) &&
+        isOptionalNullableString(incoming(), 'email', 200) &&
+        isOptionalNullableString(incoming(), 'displayName', 200);
+      allow delete: if false;
+    }
+
+    match /admin_audit_logs/{logId} {
+      allow get, list: if isAdmin();
+      allow create, update: if isAdmin() && isValidId(logId) && incoming().size() <= 25;
+      allow delete: if false;
+    }
+
+    match /admin_settings/{settingId} {
+      allow get, list: if isAdmin();
+      allow create, update: if isAdmin() && isValidId(settingId) && incoming().size() <= 30;
+      allow delete: if false;
+    }
+
+    // Crop Lots Marketplace (Public marketplace discovery; owner/admin mutations)
+    function isValidCropLot(data) {
+      return data.size() <= 30 &&
+        'farmerId' in data && data.farmerId is string && data.farmerId.size() <= 128 &&
+        'crop' in data && data.crop is string && data.crop.size() <= 128 &&
+        'quantity' in data && data.quantity is number && data.quantity >= 0 &&
+        'expectedPrice' in data && data.expectedPrice is number && data.expectedPrice >= 0 &&
+        isOptionalNullableString(data, 'farmerName', 200) &&
+        isOptionalNullableString(data, 'location', 300) &&
+        isOptionalNullableString(data, 'imageUrl', 500000);
+    }
+
+    match /crop_lots/{lotId} {
+      allow get, list: if true;
+      allow create: if isSignedIn() &&
+        isValidId(lotId) &&
+        isValidCropLot(incoming()) &&
+        (incoming().farmerId == request.auth.uid || isAdmin());
+      allow update: if isSignedIn() &&
+        isValidId(lotId) &&
+        isValidCropLot(incoming()) &&
+        (existing().farmerId == request.auth.uid || isAdmin());
+      allow delete: if isSignedIn() &&
+        isValidId(lotId) &&
+        (existing().farmerId == request.auth.uid || isAdmin());
+    }
+
+    // Buyer Offers (Restricted to buyer, farmer of lot, or admin)
+    function isValidBuyerOffer(data) {
+      return data.size() <= 25 &&
+        'lotId' in data && data.lotId is string && data.lotId.size() <= 128 &&
+        'farmerId' in data && data.farmerId is string && data.farmerId.size() <= 128 &&
+        'buyerId' in data && data.buyerId is string && data.buyerId.size() <= 128 &&
+        'offeredPrice' in data && data.offeredPrice is number && data.offeredPrice >= 0;
+    }
+
+    match /buyer_offers/{offerId} {
+      allow get: if isSignedIn() &&
+        isValidId(offerId) &&
+        (existing().buyerId == request.auth.uid || existing().farmerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() &&
+        (existing().buyerId == request.auth.uid || existing().farmerId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+        isValidId(offerId) &&
+        isValidBuyerOffer(incoming()) &&
+        incoming().buyerId == request.auth.uid;
+      allow update: if isSignedIn() &&
+        isValidId(offerId) &&
+        isValidBuyerOffer(incoming()) &&
+        incoming().buyerId == existing().buyerId &&
+        incoming().farmerId == existing().farmerId &&
+        (existing().buyerId == request.auth.uid || existing().farmerId == request.auth.uid || isAdmin());
+      allow delete: if isSignedIn() &&
+        isValidId(offerId) &&
+        (existing().buyerId == request.auth.uid || isAdmin());
+    }
+
+    // Escrow Orders (Restricted to order participants or admin)
+    function isValidOrder(data) {
+      return data.size() <= 35 &&
+        'lotId' in data && data.lotId is string && data.lotId.size() <= 128 &&
+        'farmerId' in data && data.farmerId is string && data.farmerId.size() <= 128 &&
+        'buyerId' in data && data.buyerId is string && data.buyerId.size() <= 128 &&
+        'totalAmount' in data && data.totalAmount is number && data.totalAmount >= 0;
+    }
+
+    match /orders/{orderId} {
+      allow get: if isSignedIn() &&
+        isValidId(orderId) &&
+        (existing().farmerId == request.auth.uid || existing().buyerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() &&
+        (existing().farmerId == request.auth.uid || existing().buyerId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+        isValidId(orderId) &&
+        isValidOrder(incoming()) &&
+        (incoming().buyerId == request.auth.uid || incoming().farmerId == request.auth.uid || isAdmin());
+      allow update: if isSignedIn() &&
+        isValidId(orderId) &&
+        isValidOrder(incoming()) &&
+        incoming().farmerId == existing().farmerId &&
+        incoming().buyerId == existing().buyerId &&
+        (existing().farmerId == request.auth.uid || existing().buyerId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin() && isValidId(orderId);
+    }
+
+    // Sell Requests & FPO Field Operations
+    function isValidSellRequest(data) {
+      return data.size() <= 35 &&
+        'sellerId' in data && data.sellerId is string && data.sellerId.size() <= 128 &&
+        'crop' in data && data.crop is string && data.crop.size() <= 128 &&
+        'quantity' in data && data.quantity is number && data.quantity >= 0;
+    }
+
+    match /sell_requests/{requestId} {
+      allow get: if isSignedIn() &&
+        isValidId(requestId) &&
+        (existing().sellerId == request.auth.uid || ('assignedOfficerId' in existing() && existing().assignedOfficerId == request.auth.uid) || isAdmin());
+      allow list: if isSignedIn() &&
+        (existing().sellerId == request.auth.uid || ('assignedOfficerId' in existing() && existing().assignedOfficerId == request.auth.uid) || isAdmin());
+      allow create: if isSignedIn() &&
+        isValidId(requestId) &&
+        isValidSellRequest(incoming()) &&
+        incoming().sellerId == request.auth.uid;
+      allow update: if isSignedIn() &&
+        isValidId(requestId) &&
+        isValidSellRequest(incoming()) &&
+        incoming().sellerId == existing().sellerId &&
+        (existing().sellerId == request.auth.uid || ('assignedOfficerId' in existing() && existing().assignedOfficerId == request.auth.uid) || isAdmin());
+      allow delete: if isAdmin() && isValidId(requestId);
+    }
+
+    // Rythu Mitra Public Community Feed & Problem Queries
+    function isValidCommunityPost(data) {
+      return data.size() <= 25 &&
+        'farmerId' in data && data.farmerId is string && data.farmerId.size() <= 128 &&
+        'farmerName' in data && data.farmerName is string && data.farmerName.size() <= 200 &&
+        'title' in data && data.title is string && data.title.size() >= 1 && data.title.size() <= 300 &&
+        'question' in data && data.question is string && data.question.size() >= 1 && data.question.size() <= 5000 &&
+        isOptionalNullableString(data, 'imageUrl', 600000) &&
+        (!('likes' in data) || (data.likes is list && data.likes.size() <= 500)) &&
+        (!('replies' in data) || (data.replies is list && data.replies.size() <= 200));
+    }
+
+    match /community_posts/{postId} {
+      allow get, list: if true;
+      allow create: if isSignedIn() &&
+        isValidId(postId) &&
+        isValidCommunityPost(incoming()) &&
+        incoming().farmerId == request.auth.uid;
+      allow update: if isSignedIn() &&
+        isValidId(postId) &&
+        isValidCommunityPost(incoming()) &&
+        incoming().farmerId == existing().farmerId && (
+          existing().farmerId == request.auth.uid ||
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['likes', 'replies', 'status', 'resolvedReplyId'])
+        );
+      allow delete: if isSignedIn() &&
+        isValidId(postId) &&
+        (existing().farmerId == request.auth.uid || isAdmin());
+    }
+
+    // Follower / Following Social Graph
+    function isValidFollow(data) {
+      return data.size() <= 10 &&
+        'followerId' in data && data.followerId is string && data.followerId.size() <= 128 &&
+        'followingId' in data && data.followingId is string && data.followingId.size() <= 128 &&
+        isOptionalNullableString(data, 'followerName', 200) &&
+        isOptionalNullableString(data, 'followingName', 200) &&
+        isOptionalNullableString(data, 'createdAt', 64);
+    }
+
+    match /follows/{followId} {
+      allow get, list: if true;
+      allow create: if isSignedIn() &&
+        isValidId(followId) &&
+        isValidFollow(incoming()) &&
+        incoming().followerId == request.auth.uid;
+      allow update: if false;
+      allow delete: if isSignedIn() &&
+        isValidId(followId) &&
+        (existing().followerId == request.auth.uid || isAdmin());
+    }
+
+    // Firestore Boot Connectivity Test Document
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+    }
+  }
+}
